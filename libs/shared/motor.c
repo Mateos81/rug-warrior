@@ -1,15 +1,13 @@
-#define R_MOTOR 1
-#define L_MOTOR 2
-#define C_MOTOR (R_MOTOR | L_MOTOR)
-
-int _left_enc_counts_ = 0;
-int _right_enc_counts_ = 0;
-int _motor_initial_speed_ = 0;
-int _motor_right_speed_ = 0;
-int _motor_left_speed_ = 0;
-int _motor_distance_ = 0;
-
-int _running_process_running_ = 0;
+/**
+ * calculate the approximate time needed to run
+ * in @feet with given speed [-100 : 100]
+ */
+float feetToMotor(float feet, int speed)
+{
+    float tmp = (float)speed;
+    float inv = 100./tmp;
+    return (feet/0.67)*inv;
+}
 
 /**
  * start it with thread
@@ -19,17 +17,14 @@ int _running_process_running_ = 0;
 void running()
 {
     int diff;
-
     int inv = (-1)*(_motor_initial_speed_ < 0) +
-                   (_motor_initial_speed_ > 0);
-
+              (_motor_initial_speed_ > 0);
     _motor_right_speed_ = inv*_motor_initial_speed_;
     _motor_left_speed_ = inv*_motor_initial_speed_;
-
     _running_process_running_ = 1;
     reset_encoder_aux();
 
-    while(_running_process_running_)
+    while(_running_process_running_ && (_motor_left_speed_ > 0 || _motor_right_speed_ > 0))
     {
         diff = _right_enc_counts_ - _left_enc_counts_;
 
@@ -47,11 +42,10 @@ void running()
 
         motor(0, inv*_motor_left_speed_);
         motor(1, inv*_motor_right_speed_);
-
-        sleep(0.1);
+        sleep(_process_yield_time_);
     }
 
-    _running_process_running_ = 0;
+    _running_process_running_ = -1;
 }
 
 /**
@@ -64,13 +58,10 @@ void running()
 void running_forever()
 {
     int diff;
-
     int inv = (-1)*(_motor_initial_speed_ < 0) +
-                   (_motor_initial_speed_ > 0);
-
+              (_motor_initial_speed_ > 0);
     _motor_right_speed_ = inv*_motor_initial_speed_;
     _motor_left_speed_ = inv*_motor_initial_speed_;
-
     _running_process_running_ = 1;
     reset_encoder_aux();
 
@@ -86,79 +77,12 @@ void running_forever()
 
         motor(0, inv*_motor_left_speed_);
         motor(1, inv*_motor_right_speed_);
-
-        sleep(0.1);
+        sleep(_process_yield_time_);
     }
 
-    /* unreachable code */
-    _running_process_running_ = 0;
     motor(0, 0);
     motor(1, 0);
-}
-
-/**
- * count the switching state of encoders
- * value are stored into
- * _left_enc_counts_ and _right_enc_counts_
- * use this function under parallele thread
- */
-void encoder_aux()
-{
-    int l_old, r_old, l_new, r_new;
-
-    while(1)
-    {
-        l_new = left_shaft();
-        r_new = right_shaft();
-
-        if(l_old & ~l_new)
-            _left_enc_counts_++;
-
-        if(r_old & ~r_new)
-            _right_enc_counts_++;
-
-        l_old = l_new;
-        r_old = r_new;
-    }
-}
-
-/**
- * reset encoders count
- */
-void reset_encoder_aux()
-{
-    while(_left_enc_counts_)
-    {
-        _left_enc_counts_ = 0;
-        sleep(0.001);
-    }
-    while(_right_enc_counts_)
-    {
-        _right_enc_counts_ = 0;
-        sleep(0.001);
-    }
-}
-
-/**
- * check if encoder_aux() process
- * are not in running state
- * can be not thread-safe
- */
-void encoder_reset()
-{
-    _left_enc_counts_ = 0;
-    _right_enc_counts_ = 0;
-}
-
-/**
- * calculate the time needed to run
- * in x feet with given speed [-100 : 100]
- */
-float feetToMotor(float feet, int speed)
-{
-    float tmp = (float)speed;
-    float inv = 100./tmp;
-    return (feet/0.67)*inv;
+    _running_process_running_ = -1;
 }
 
 /**
@@ -180,7 +104,6 @@ void rotate(int flags, int angle)
 
     radius = 14.;
     invert = 1;
-
     adjust = -(angle < 0) + (angle > 0);
     angle = (angle < 0)*(-angle) + (angle > 0)*angle;
 
@@ -193,20 +116,86 @@ void rotate(int flags, int angle)
 
     _motor_right_speed_ = adjust*_motor_initial_speed_*(flags & 1)*invert;
     _motor_left_speed_ = adjust*_motor_initial_speed_*(flags & 2);
-
     reset_encoder_aux();
-
     needed = (int)(480.*((float)(angle))/2160.);
 
     while(_motor_left_speed_ || _motor_right_speed_)
     {
         if(flags & 1 && _right_enc_counts_ >= needed)
-          _motor_right_speed_ = 0;
+            _motor_right_speed_ = 0;
 
         if(flags & 2 && _left_enc_counts_ >= needed)
-          _motor_left_speed_ = 0;
+            _motor_left_speed_ = 0;
 
         motor(0, _motor_left_speed_);
         motor(1, _motor_right_speed_);
     }
+}
+
+/**
+ * move the robot in front of object to the distance
+ * of @distance in cm
+ * @margin > 0.22 (distance between two shaft)
+ * @distance and @margin need to have the same sign
+ */
+void move_behind(float distance, float marging, int minimal_speed)
+{
+    float last;
+    int scan;
+    int pid;
+    pid = 0;
+    _move_behind_process_running_ = 1;
+    _running_process_running_ = -1;
+
+    while(_move_behind_process_running_)
+    {
+        last = _move_behind_detected_distance_;
+
+        if(last >= (distance+marging))
+        {
+            _running_process_running_ = 0;
+
+            while(_running_process_running_ >= 0 && pid);
+
+            _motor_initial_speed_ = minimal_speed+(int)(last-(distance+marging));
+            pid = start_process(running_forever());
+        }
+        else if(last <= (distance-marging))
+        {
+            _running_process_running_ = 0;
+
+            while(_running_process_running_ >= 0 && pid);
+
+            _motor_initial_speed_ = -minimal_speed+(int)(-(distance-marging)+last);
+            pid = start_process(running_forever());
+        }
+        else if(!_motor_initial_speed_) break;
+        else break;
+
+        sleep(_process_yield_time_);
+    }
+
+    _running_process_running_ = 0;
+
+    while(_running_process_running_ != -1);
+
+    _move_behind_process_running_ = -1;
+}
+
+/**
+ *
+ */
+void detect_distance_sonar()
+{
+    _detect_distance_process_running_ = 1;
+
+    while(_detect_distance_process_running_)
+    {
+        ping();
+        _move_behind_detected_distance_ = feetToCm(range());
+        printf("%f\n", _move_behind_detected_distance_);
+        sleep(_process_yield_time_);
+    }
+
+    _detect_distance_process_running_ = -1;
 }

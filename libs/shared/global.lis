@@ -1,5 +1,11 @@
+shared/global.c
+shared/encoder.c
 shared/motor.c
 shared/convert.c
 shared/screen.c
 shared/sonar.c
 shared/common.c
+shared/bumper.c
+shared/photo_cell.c
+shared/escape.c
+shared/thread.c

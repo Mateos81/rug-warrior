@@ -1,5 +1,7 @@
 void main()
 {
+    int scan;
+
     init_motors();
     init_sonar();
     sonar_init_servo();
@@ -17,6 +19,14 @@ void main()
 
     _detect_distance_process_running_ = 0;
     while(_detect_distance_process_running_ != 1);
+
+    for(scan = -100; scan<100; ++scan)
+    {
+        set_servo(scan);
+        ping();
+        last = feetToCm(range());
+        printf("scan %f\n", last);
+    }
 
     set_servo(0);
     sonar_servo_off();
